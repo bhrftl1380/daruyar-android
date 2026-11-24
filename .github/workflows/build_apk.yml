@@ -1,0 +1,64 @@
+name: Build Daruyar APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build APK manually
+        run: |
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/34.0.0"
+          PLATFORM="$ANDROID_HOME/platforms/android-34/android.jar"
+
+          mkdir -p build/compiled_res build/gen build/classes build/dex build/apk
+          cp -r web/* android/assets/
+
+          $BUILD_TOOLS/aapt2 compile --dir android/res -o build/compiled_res/res.zip
+
+          $BUILD_TOOLS/aapt2 link \
+            -I "$PLATFORM" \
+            --manifest android/AndroidManifest.xml \
+            -A android/assets \
+            --java build/gen \
+            -o build/apk/unaligned.apk \
+            build/compiled_res/res.zip
+
+          find android/src build/gen -name "*.java" > sources.txt
+          javac -source 1.8 -target 1.8 \
+            -bootclasspath "$PLATFORM" \
+            -d build/classes \
+            @sources.txt
+
+          $BUILD_TOOLS/d8 --lib "$PLATFORM" --output build/dex $(find build/classes -name "*.class")
+
+          cd build/dex
+          zip -uj ../apk/unaligned.apk classes.dex
+          cd ../..
+
+          $BUILD_TOOLS/zipalign -f 4 build/apk/unaligned.apk build/apk/aligned.apk
+
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          $BUILD_TOOLS/apksigner sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --out daruyar.apk build/apk/aligned.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daruyar-apk
+          path: daruyar.apk
